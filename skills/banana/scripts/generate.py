@@ -7,6 +7,7 @@ Uses only Python stdlib (no pip dependencies).
 Usage:
     generate.py --prompt "a cat in space" [--aspect-ratio 16:9] [--resolution 1K]
                 [--model MODEL] [--api-key KEY] [--thinking LEVEL] [--image-only]
+                [--image path/to/reference.jpg]
 """
 
 import argparse
@@ -31,13 +32,27 @@ VALID_RESOLUTIONS = {"512", "1K", "2K", "4K"}
 
 
 def generate_image(prompt, model, aspect_ratio, resolution, api_key,
-                   thinking_level=None, image_only=False):
+                   thinking_level=None, image_only=False, image_path=None):
     """Call Gemini API to generate an image."""
     url = f"{API_BASE}/{model}:generateContent?key={api_key}"
 
+    parts = [{"text": prompt}]
+    if image_path:
+        image_path = Path(image_path).resolve()
+        if not image_path.exists():
+            print(json.dumps({"error": True, "message": f"Image not found: {image_path}"}))
+            sys.exit(1)
+        with open(image_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("utf-8")
+        suffix = image_path.suffix.lower()
+        mime_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                      ".webp": "image/webp", ".gif": "image/gif"}
+        mime_type = mime_types.get(suffix, "image/png")
+        parts.append({"inlineData": {"mimeType": mime_type, "data": image_b64}})
+
     modalities = ["IMAGE"] if image_only else ["TEXT", "IMAGE"]
     body = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {
             "responseModalities": modalities,
             "imageConfig": {
@@ -94,11 +109,11 @@ def generate_image(prompt, model, aspect_ratio, resolution, api_key,
         print(json.dumps({"error": True, "message": f"No candidates returned. Reason: {finish_reason}"}))
         sys.exit(1)
 
-    parts = candidates[0].get("content", {}).get("parts", [])
+    response_parts = candidates[0].get("content", {}).get("parts", [])
     image_data = None
     text_response = ""
 
-    for part in parts:
+    for part in response_parts:
         if "inlineData" in part:
             image_data = part["inlineData"]["data"]
         elif "text" in part:
@@ -136,6 +151,7 @@ def main():
     parser.add_argument("--api-key", default=None, help="Google AI API key (or set GOOGLE_AI_API_KEY env)")
     parser.add_argument("--thinking", default=None, choices=["minimal", "low", "medium", "high"], help="Thinking level")
     parser.add_argument("--image-only", action="store_true", help="Return image only (no text)")
+    parser.add_argument("--image", default=None, help="Path to reference image for image-grounded generation")
 
     args = parser.parse_args()
 
@@ -160,6 +176,7 @@ def main():
         api_key=api_key,
         thinking_level=args.thinking,
         image_only=args.image_only,
+        image_path=args.image,
     )
     print(json.dumps(result, indent=2))
 
